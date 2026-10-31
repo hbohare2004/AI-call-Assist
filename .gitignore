@@ -1,0 +1,14 @@
+.env
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+backend/.venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/calls.db
+frontend/.env.local
+frontend/node_modules/
+frontend/.next/
+frontend/tsconfig.tsbuildinfo
