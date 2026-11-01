@@ -13,14 +13,35 @@ async function fetchApi(path: string, init?: RequestInit): Promise<Response> {
   }
 }
 
+async function getErrorMessage(response: Response, fallback: string): Promise<string> {
+  const body = await response.text();
+  let detail = "";
+
+  if (body) {
+    try {
+      const data: unknown = JSON.parse(body);
+      if (typeof data === "object" && data !== null && "detail" in data) {
+        const value = data.detail;
+        detail = typeof value === "string" ? value : JSON.stringify(value);
+      } else {
+        detail = body;
+      }
+    } catch {
+      detail = body;
+    }
+  }
+
+  const status = `HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}`;
+  const excerpt = detail ? ` ${detail.slice(0, 300)}` : "";
+  return `${fallback} (${status}).${excerpt}`;
+}
+
 export async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetchApi(path, init);
-  const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const detail = typeof data.detail === "string" ? data.detail : "The backend request failed.";
-    throw new Error(detail);
+    throw new Error(await getErrorMessage(response, "The backend request failed."));
   }
-  return data as T;
+  return response.json() as Promise<T>;
 }
 
 export async function transcribeAudio(callId: string, audio: Blob) {
@@ -31,11 +52,10 @@ export async function transcribeAudio(callId: string, audio: Blob) {
     method: "POST",
     body: formData,
   });
-  const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const detail = typeof data.detail === "string" ? data.detail : "Could not transcribe the recording.";
-    throw new Error(detail);
+    throw new Error(await getErrorMessage(response, "Could not transcribe the recording."));
   }
+  const data = await response.json();
   if (typeof data.transcript !== "string") {
     throw new Error("The transcription service returned an invalid response.");
   }
@@ -60,9 +80,7 @@ export async function generateSpeech(text: string): Promise<Blob> {
     body: JSON.stringify({ text }),
   });
   if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-    const detail = typeof data.detail === "string" ? data.detail : "Could not generate speech.";
-    throw new Error(detail);
+    throw new Error(await getErrorMessage(response, "Could not generate speech."));
   }
   return response.blob();
 }
