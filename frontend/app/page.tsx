@@ -34,7 +34,7 @@ const SPEECH_RMS_THRESHOLD = 0.018;
 const SILENCE_RMS_THRESHOLD = 0.012;
 const MIN_SPEECH_DURATION_MS = 250;
 const END_OF_SPEECH_SILENCE_MS = 200;
-const INITIAL_GREETING = "Hello! I am Harsh AI assistant. He is currently unavailable. How can I help you?";
+const INITIAL_GREETING = "नमस्ते! मैं हर्ष की एआई सहायक हूँ। हर्ष अभी उपलब्ध नहीं हैं। बताइए, आपको क्या काम था?";
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "An unexpected error occurred.";
@@ -58,6 +58,7 @@ export default function Home() {
 
   const callIdRef = useRef<string | null>(null);
   const isCallActiveRef = useRef(false);
+  const isEndingCallRef = useRef(false);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const microphoneStreamRef = useRef<MediaStream | null>(null);
   const microphoneAnalyserRef = useRef<AnalyserNode | null>(null);
@@ -189,7 +190,11 @@ export default function Home() {
       setError(errorText(requestError));
       setStatus("Error");
     } finally {
-      if (isCallActiveRef.current && callIdRef.current === activeId) {
+      if (
+        isCallActiveRef.current
+        && !isEndingCallRef.current
+        && callIdRef.current === activeId
+      ) {
         await startRecording();
       }
       setBusy(false);
@@ -348,6 +353,7 @@ export default function Home() {
   }
 
   async function startConversation() {
+    isEndingCallRef.current = false;
     setError("");
     setSummary(null);
     setIsHistoryOpen(false);
@@ -384,17 +390,18 @@ export default function Home() {
   async function endConversation() {
     const activeId = callIdRef.current;
     if (!activeId) return;
-    isCallActiveRef.current = false;
+    isEndingCallRef.current = true;
     setBusy(true);
     setStatus("Processing");
-    if (recorderRef.current?.state === "recording") {
-      await stopRecording();
-    } else {
-      await activeTurnPromiseRef.current;
-    }
-    releaseMicrophone();
-    audioRef.current?.pause();
     try {
+      if (recorderRef.current?.state === "recording") {
+        await stopRecording();
+      } else {
+        await activeTurnPromiseRef.current;
+      }
+      isCallActiveRef.current = false;
+      releaseMicrophone();
+      audioRef.current?.pause();
       const data = await requestJson<{ summary: CallSummary }>(`/api/calls/${activeId}/end`, {
         method: "POST",
       });
@@ -407,6 +414,7 @@ export default function Home() {
       setError(errorText(requestError));
       setStatus("Error");
     } finally {
+      isEndingCallRef.current = false;
       setBusy(false);
     }
   }
@@ -421,6 +429,14 @@ export default function Home() {
   }
 
   async function openHistory(id: string) {
+    if (busy) {
+      setError("Wait for the current response to finish before opening call history.");
+      return;
+    }
+    if (callIdRef.current) {
+      await endConversation();
+      if (callIdRef.current) return;
+    }
     isCallActiveRef.current = false;
     if (recorderRef.current?.state === "recording") {
       await stopRecording();

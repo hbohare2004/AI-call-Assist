@@ -11,7 +11,7 @@ from services.llm_service import SYSTEM_PROMPT, generate_response
 from services.stt_service import transcribe_audio
 from services.tts_service import synthesize_speech
 
-GREETING = "Hello! I am Harsh AI assistant. He is currently unavailable. How can I help you?"
+GREETING = "नमस्ते! मैं हर्ष की एआई सहायक हूँ। हर्ष अभी उपलब्ध नहीं हैं। बताइए, आपको क्या काम था?"
 
 
 def now_iso() -> str:

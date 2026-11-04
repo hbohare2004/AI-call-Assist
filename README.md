@@ -6,7 +6,7 @@ A browser-based AI receptionist for Harsh. The Next.js dashboard records complet
 
 - **Speech to text:** Sarvam AI `saaras:v3` in `transcribe` mode. Language defaults to `unknown` for automatic detection across Hindi and English; WebM and other documented audio formats are accepted.
 - **AI responses and call summaries:** Groq Responses API using `openai/gpt-oss-20b`. Recent conversation messages are persisted in SQLite and provided as context. If Groq returns its `tool_use_failed` error for a text-only response, the backend retries that turn once with Groq Chat Completions.
-- **Text to speech:** Official `sarvamai` SDK with `bulbul:v3`, speaker `shubh`, WAV output at 22050 Hz. Hindi/Hinglish text should use Devanagari for Hindi words and Roman script for English words.
+- **Text to speech:** Official `sarvamai` SDK with `bulbul:v4-flash`, speaker `aarti_hi_customer` (Aarti), WAV output at 22050 Hz. Speech language is selected from the generated reply: Hindi for Devanagari and English for Latin text. The initial greeting is in Hindi; replies follow the caller's Hindi or English.
 - **Storage:** SQLite in `backend/calls.db`; calls, messages, and structured summaries are stored locally.
 - **Telephone integration:** Not included. The browser call/session workflow is kept separate so a telephony adapter can be added later.
 
@@ -49,14 +49,14 @@ Copy-Item backend\.env.example backend\.env
 notepad backend\.env
 ```
 
-Set `GROQ_API_KEY` and `SARVAM_API_KEY` in `backend\.env`. The model defaults are already provided by `.env.example`:
+Set `GROQ_API_KEY` and `SARVAM_API_KEY` in `backend\.env`. The dashboard and project messages remain in English; speech is Hindi by default and switches to English when the caller speaks English. The model defaults are already provided by `.env.example`:
 
 ```dotenv
 GROQ_MODEL=openai/gpt-oss-20b
 STT_MODEL=saaras:v3
 STT_LANGUAGE_CODE=unknown
-TTS_MODEL=bulbul:v3
-TTS_SPEAKER=shubh
+TTS_MODEL=bulbul:v4-flash
+TTS_SPEAKER=aarti_hi_customer
 ```
 
 Do not put provider keys in frontend environment variables. `.env` files are excluded by `.gitignore`. The backend loads configuration only from `backend\.env`.
@@ -129,7 +129,7 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/chat `
 # Sarvam TTS (returns WAV audio at 22050 Hz)
 Invoke-WebRequest -Method Post http://127.0.0.1:8000/api/tts `
   -ContentType "application/json" `
-  -Body '{"text":"नमस्ते! How can I help you today?"}' `
+  -Body '{"text":"नमस्ते! मैं आपकी किस प्रकार सहायता कर सकती हूँ?"}' `
   -OutFile response.wav
 
 # Sarvam Saaraas STT (replace the path with a supported audio file)

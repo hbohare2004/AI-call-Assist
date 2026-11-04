@@ -15,8 +15,8 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 STT_MODEL = os.getenv("STT_MODEL", "saaras:v3")
 SARVAM_STT_LANGUAGE_CODE = os.getenv("STT_LANGUAGE_CODE", "unknown")
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
-SARVAM_TTS_MODEL = os.getenv("TTS_MODEL", "bulbul:v3")
-SARVAM_TTS_SPEAKER = os.getenv("TTS_SPEAKER", "shubh")
+SARVAM_TTS_MODEL = os.getenv("TTS_MODEL", "bulbul:v4-flash")
+SARVAM_TTS_SPEAKER = os.getenv("TTS_SPEAKER", "aarti_hi_customer")
 FRONTEND_ORIGINS = tuple(
     origin.strip()
     for origin in os.getenv(
