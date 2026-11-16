@@ -239,6 +239,14 @@ async def get_calls() -> dict:
     return {"calls": list_calls()}
 
 
+@app.delete("/api/calls")
+async def delete_all_calls() -> dict[str, int | bool]:
+    with db_connect() as conn:
+        count = conn.execute("SELECT COUNT(*) FROM calls").fetchone()[0]
+        conn.execute("DELETE FROM calls")
+    return {"deleted": True, "count": count}
+
+
 @app.get("/api/calls/{call_id}")
 async def get_call_details(call_id: str) -> dict:
     call = get_call(call_id, include_messages=True)

@@ -94,7 +94,7 @@ npm install
 npm run dev
 ```
 
-Open <http://localhost:3000>, allow microphone access, and start a conversation. Microphone access is prepared before the greeting, then recording resumes as soon as the assistant finishes speaking. Caller speech is automatically sent after the voice activity detector detects the end of an utterance; “Send now” remains available as a manual fallback. The dashboard also supports typed turns, stopping playback, ending calls, and browsing or deleting saved call history.
+Open <http://localhost:3000>, allow microphone access, and start a conversation. The call screen shows an animated orb while the assistant speaks and one button to start or stop the conversation. Microphone access is prepared before the greeting, then recording resumes as soon as the assistant finishes speaking. Browser echo cancellation, noise suppression, and automatic gain control are enabled when supported. Caller speech is automatically sent after 600 ms of silence, which helps preserve natural pauses; lower-volume speech is also detected more reliably. Listening resumes after a transcription error. Call history lets you delete individual calls or clear all saved calls; transcripts are not shown in the dashboard.
 
 ## Deployment configuration
 
@@ -111,10 +111,11 @@ SQLite is stored in `backend/calls.db`. If the deployment platform uses ephemera
 - `POST /api/calls` — creates a call session and initial greeting.
 - `POST /api/calls/{id}/transcribe`, `/respond`, `/speak`, and `/end` — call-scoped compatibility endpoints used for session workflows and summary generation.
 - `GET /api/calls` and `GET /api/calls/{id}` — retrieve call history or full call details.
+- `DELETE /api/calls` — delete all saved calls and related records.
 - `DELETE /api/calls/{id}` — delete a call and its related records.
 - `GET /api/health` and `/health` — report service configuration without exposing API keys.
 
-The browser UI uses `/api/transcribe`, `/api/chat`, and `/api/tts` for each recorded turn. End a conversation to generate and save the structured summary and transcript. Unknown caller details are recorded as “Not provided.” Caller phone numbers are only included if stated in the conversation; this browser demo does not receive telephone-network caller ID.
+The browser UI uses `/api/transcribe`, `/api/chat`, and `/api/tts` for each recorded turn. End a conversation to generate and save the structured summary; the dashboard does not display transcripts. Unknown caller details are recorded as “Not provided.” Caller phone numbers are only included if stated in the conversation; this browser demo does not receive telephone-network caller ID.
 
 ## Test each service
 

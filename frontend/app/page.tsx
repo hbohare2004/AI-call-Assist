@@ -1,26 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FormEvent } from "react";
 import { chatMessage, generateSpeech, requestJson, transcribeAudio } from "../services/api";
 
 type Status = "Ready" | "Listening" | "Processing" | "AI Speaking" | "Completed" | "Error";
-type Message = {
-  role: "user" | "assistant";
-  content: string;
-  created_at?: string;
-};
-type CallSummary = {
-  caller_name: string;
-  caller_phone: string;
-  reason_for_call: string;
-  callback_requested: string;
-  preferred_callback_time: string;
-  urgency: string;
-  summary: string;
-  transcript: string;
-  created_at: string;
-};
 type CallItem = {
   id: string;
   started_at: string;
@@ -30,10 +13,10 @@ type CallItem = {
   caller_name: string | null;
 };
 
-const SPEECH_RMS_THRESHOLD = 0.018;
-const SILENCE_RMS_THRESHOLD = 0.012;
+const SPEECH_RMS_THRESHOLD = 0.012;
+const SILENCE_RMS_THRESHOLD = 0.008;
 const MIN_SPEECH_DURATION_MS = 250;
-const END_OF_SPEECH_SILENCE_MS = 200;
+const END_OF_SPEECH_SILENCE_MS = 600;
 const INITIAL_GREETING = "नमस्ते! मैं हर्ष की एआई सहायक हूँ। हर्ष अभी उपलब्ध नहीं हैं। बताइए, आपको क्या काम था?";
 
 function errorText(error: unknown): string {
@@ -42,19 +25,16 @@ function errorText(error: unknown): string {
 
 export default function Home() {
   const [callId, setCallId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
   const [calls, setCalls] = useState<CallItem[]>([]);
-  const [summary, setSummary] = useState<CallSummary | null>(null);
   const [status, setStatus] = useState<Status>("Ready");
   const [busy, setBusy] = useState(false);
+  const [isStartingCall, setIsStartingCall] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [isAiSpeaking, setIsAiSpeaking] = useState(false);
   const [error, setError] = useState("");
-  const [manualText, setManualText] = useState("");
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
-  const [viewingHistoryId, setViewingHistoryId] = useState<string | null>(null);
-  const [audioUrl, setAudioUrl] = useState("");
   const [deletingCallId, setDeletingCallId] = useState<string | null>(null);
+  const [isDeletingAllCalls, setIsDeletingAllCalls] = useState(false);
 
   const callIdRef = useRef<string | null>(null);
   const isCallActiveRef = useRef(false);
@@ -67,7 +47,6 @@ export default function Home() {
   const audioContextRef = useRef<AudioContext | null>(null);
   const activeTurnPromiseRef = useRef<Promise<void>>(Promise.resolve());
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const transcriptEndRef = useRef<HTMLDivElement | null>(null);
   const audioUrlRef = useRef("");
   const greetingAudioRef = useRef<{ text: string; promise: Promise<Blob> } | null>(null);
 
@@ -113,10 +92,6 @@ export default function Home() {
   }, [refreshCalls]);
 
   useEffect(() => {
-    transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
-  useEffect(() => {
     if (!isHistoryOpen) return;
     function closeOnEscape(event: KeyboardEvent) {
       if (event.key === "Escape") setIsHistoryOpen(false);
@@ -125,21 +100,12 @@ export default function Home() {
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [isHistoryOpen]);
 
-  useEffect(() => {
-    audioUrlRef.current = audioUrl;
-  }, [audioUrl]);
-
-  function appendMessage(message: Message) {
-    setMessages((existing) => [...existing, message]);
-  }
-
   async function playSpeech(text: string, preparedAudio?: Blob) {
     const blob = preparedAudio ?? await generateSpeech(text);
     if (!blob.size) throw new Error("The speech service returned empty audio.");
     const nextUrl = URL.createObjectURL(blob);
     if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
     audioUrlRef.current = nextUrl;
-    setAudioUrl(nextUrl);
 
     const audio = audioRef.current;
     if (!audio) throw new Error("Audio playback is not available in this browser.");
@@ -174,17 +140,15 @@ export default function Home() {
     });
   }
 
-  async function sendTranscript(transcript: string, activeId: string, alreadyDisplayed = false) {
+  async function sendTranscript(transcript: string, activeId: string) {
     const cleaned = transcript.trim();
     if (!cleaned) return;
     setError("");
     setBusy(true);
     setStatus("Processing");
-    if (!alreadyDisplayed) appendMessage({ role: "user", content: cleaned });
 
     try {
       const data = await chatMessage(activeId, cleaned);
-      appendMessage({ role: "assistant", content: data.response });
       await playSpeech(data.response);
     } catch (requestError) {
       setError(errorText(requestError));
@@ -215,18 +179,30 @@ export default function Home() {
       const data = await transcribeAudio(activeId, blob);
       const transcript = data.transcript.trim();
       if (!transcript) throw new Error("No speech was detected. Please try recording again.");
-      appendMessage({ role: "user", content: transcript, created_at: data.created_at });
-      await sendTranscript(transcript, activeId, true);
+      await sendTranscript(transcript, activeId);
     } catch (requestError) {
       setError(errorText(requestError));
       setStatus("Error");
       setBusy(false);
+      if (
+        isCallActiveRef.current
+        && !isEndingCallRef.current
+        && callIdRef.current === activeId
+      ) {
+        await startRecording();
+      }
     }
   }
 
   async function prepareMicrophone() {
     if (microphoneStreamRef.current && microphoneAnalyserRef.current) return;
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        autoGainControl: true,
+        echoCancellation: true,
+        noiseSuppression: true,
+      },
+    });
     let audioContext: AudioContext | null = null;
     try {
       audioContext = new AudioContext();
@@ -354,10 +330,10 @@ export default function Home() {
 
   async function startConversation() {
     isEndingCallRef.current = false;
+    setIsStartingCall(true);
+    setBusy(true);
     setError("");
-    setSummary(null);
     setIsHistoryOpen(false);
-    setViewingHistoryId(null);
     setStatus("Processing");
     try {
       const data = await requestJson<{ call_id: string; greeting: string }>("/api/calls", {
@@ -368,7 +344,6 @@ export default function Home() {
       callIdRef.current = data.call_id;
       isCallActiveRef.current = true;
       setCallId(data.call_id);
-      setMessages([{ role: "assistant", content: data.greeting }]);
       const greetingAudioPromise = greetingAudioRef.current?.text === data.greeting
         ? greetingAudioRef.current.promise.catch(() => generateSpeech(data.greeting))
         : generateSpeech(data.greeting);
@@ -384,13 +359,18 @@ export default function Home() {
     } catch (requestError) {
       setError(errorText(requestError));
       setStatus("Error");
+    } finally {
+      setIsStartingCall(false);
+      setBusy(false);
     }
   }
 
   async function endConversation() {
     const activeId = callIdRef.current;
-    if (!activeId) return;
+    if (!activeId || isEndingCallRef.current) return;
     isEndingCallRef.current = true;
+    isCallActiveRef.current = false;
+    audioRef.current?.pause();
     setBusy(true);
     setStatus("Processing");
     try {
@@ -401,11 +381,9 @@ export default function Home() {
       }
       isCallActiveRef.current = false;
       releaseMicrophone();
-      audioRef.current?.pause();
-      const data = await requestJson<{ summary: CallSummary }>(`/api/calls/${activeId}/end`, {
+      await requestJson<Record<string, unknown>>(`/api/calls/${activeId}/end`, {
         method: "POST",
       });
-      setSummary(data.summary);
       setCallId(null);
       callIdRef.current = null;
       setStatus("Completed");
@@ -419,65 +397,12 @@ export default function Home() {
     }
   }
 
-  async function sendManualMessage(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const activeId = callIdRef.current;
-    const text = manualText.trim();
-    if (!activeId || !text || busy) return;
-    setManualText("");
-    await sendTranscript(text, activeId);
-  }
-
-  async function openHistory(id: string) {
-    if (busy) {
-      setError("Wait for the current response to finish before opening call history.");
-      return;
-    }
-    if (callIdRef.current) {
-      await endConversation();
-      if (callIdRef.current) return;
-    }
-    isCallActiveRef.current = false;
-    if (recorderRef.current?.state === "recording") {
-      await stopRecording();
-    } else {
-      await activeTurnPromiseRef.current;
-    }
-    releaseMicrophone();
-    audioRef.current?.pause();
-    try {
-      const data = await requestJson<{
-        id: string;
-        messages: Message[];
-        call_summary: CallSummary | null;
-      }>(`/api/calls/${id}`);
-      setMessages(data.messages);
-      setSummary(data.call_summary);
-      setCallId(null);
-      callIdRef.current = null;
-      isCallActiveRef.current = false;
-      setViewingHistoryId(id);
-      setError("");
-      setStatus("Completed");
-      setIsHistoryOpen(false);
-    } catch (requestError) {
-      setError(errorText(requestError));
-      setStatus("Error");
-    }
-  }
-
   async function deleteHistory(id: string) {
-    if (!window.confirm("Delete this call, transcript, and summary? This cannot be undone.")) return;
+    if (!window.confirm("Delete this call from history? This cannot be undone.")) return;
     setDeletingCallId(id);
     try {
       await requestJson(`/api/calls/${id}`, { method: "DELETE" });
       setCalls((existing) => existing.filter((call) => call.id !== id));
-      if (viewingHistoryId === id) {
-        setViewingHistoryId(null);
-        setMessages([]);
-        setSummary(null);
-        setStatus("Ready");
-      }
     } catch (requestError) {
       setError(errorText(requestError));
       setStatus("Error");
@@ -486,14 +411,27 @@ export default function Home() {
     }
   }
 
-  function stopAudio() {
-    const audio = audioRef.current;
-    if (audio && !audio.paused) {
-      audio.pause();
-      audio.currentTime = 0;
+  async function deleteAllHistory() {
+    if (
+      !calls.length
+      || callIdRef.current
+      || deletingCallId
+      || isDeletingAllCalls
+      || !window.confirm("Delete all saved call history? This cannot be undone.")
+    ) {
+      return;
     }
-    setIsAiSpeaking(false);
-    if (callIdRef.current) setStatus(isRecording ? "Listening" : "Ready");
+    setIsDeletingAllCalls(true);
+    try {
+      await requestJson<{ deleted: boolean }>("/api/calls", { method: "DELETE" });
+      setCalls([]);
+      setError("");
+    } catch (requestError) {
+      setError(errorText(requestError));
+      setStatus("Error");
+    } finally {
+      setIsDeletingAllCalls(false);
+    }
   }
 
   return (
@@ -509,15 +447,6 @@ export default function Home() {
             <p className="muted mt-2">A personal AI receptionist for calls you can’t answer.</p>
           </div>
           <div className="flex flex-col gap-3 sm:items-end">
-            <div className="status-card panel px-4 py-3" aria-live="polite">
-              <p className="muted text-xs">ASSISTANT STATUS</p>
-              <div className="mt-1 flex items-center gap-2">
-                {(status === "Listening" || status === "AI Speaking") && (
-                  <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-                )}
-                <p className="font-semibold">{status}</p>
-              </div>
-            </div>
             <button
               type="button"
               onClick={() => {
@@ -539,129 +468,27 @@ export default function Home() {
           </div>
         )}
 
-        <div className="grid gap-6">
-          <section className="voice-panel panel p-5 sm:p-7">
-            <div className="control-row mb-5 flex flex-wrap gap-2">
-              {!callId ? (
-                <button
-                  type="button"
-                  onClick={() => void startConversation()}
-                  disabled={busy}
-                  className="primary-action rounded-xl px-5 py-3 font-semibold"
-                >
-                  Start conversation
-                </button>
-              ) : (
-                <>
-                  {isRecording ? (
-                    <button
-                      type="button"
-                      onClick={() => void stopRecording()}
-                      className="rounded-xl border border-rose-500/50 bg-rose-500/10 px-5 py-3 font-semibold text-rose-200"
-                    >
-                      Send now
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => void startRecording()}
-                      disabled={busy || isAiSpeaking}
-                      className="rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-5 py-3 font-semibold text-emerald-100"
-                    >
-                      Start recording
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => void endConversation()}
-                    disabled={busy}
-                    className="rounded-xl border border-rose-500/50 bg-rose-500/10 px-5 py-3 font-semibold text-rose-200"
-                  >
-                    End conversation & save summary
-                  </button>
-                </>
-              )}
-              <button
-                type="button"
-                onClick={stopAudio}
-                disabled={!isAiSpeaking}
-                className="rounded-xl border border-slate-700 px-4 py-3 text-sm"
-              >
-                Stop audio
-              </button>
-            </div>
-
-            <audio
-              ref={audioRef}
-              controls
-              className={`mb-5 w-full ${audioUrl ? "" : "hidden"}`}
-              aria-label="AI-generated response audio"
-            />
-
-            <form onSubmit={(event) => void sendManualMessage(event)} className="message-form flex gap-2">
-              <input
-                value={manualText}
-                onChange={(event) => setManualText(event.target.value)}
-                placeholder="Type a message…"
-                disabled={!callId || busy}
-                aria-label="Type a caller message"
-                className="message-input min-w-0 flex-1 rounded-xl border px-4 py-3 text-sm outline-none"
-              />
-              <button
-                type="submit"
-                disabled={!callId || busy || !manualText.trim()}
-                className="rounded-xl border border-slate-600 px-4 py-3 text-sm font-semibold"
-              >
-                Send
-              </button>
-            </form>
-
-            <div className="mt-7">
-              <div className="mb-3 flex items-center justify-between">
-                <h3 className="font-semibold">Conversation transcript</h3>
-                <span className="pill">{messages.length} messages</span>
-              </div>
-              <div className="transcript-list max-h-[420px] space-y-3 overflow-y-auto rounded-xl border p-3" aria-live="polite">
-                {messages.length === 0 ? (
-                  <p className="muted p-4 text-center text-sm">Your conversation will appear here.</p>
-                ) : (
-                  messages.map((message, index) => (
-                    <div
-                      key={`${index}-${message.role}`}
-                      className={`max-w-[92%] rounded-xl border p-3 text-sm leading-6 ${
-                        message.role === "user"
-                          ? "ml-auto border-cyan-400/20 bg-cyan-400/10 text-cyan-50"
-                          : "mr-auto border-slate-700 bg-slate-800/80 text-slate-100"
-                      }`}
-                    >
-                      <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">
-                        {message.role === "user" ? "Caller · Transcription" : "AI assistant"}
-                      </p>
-                      <p className="whitespace-pre-wrap">{message.content}</p>
-                    </div>
-                  ))
-                )}
-                <div ref={transcriptEndRef} />
-              </div>
-            </div>
-
-            {summary && (
-              <section className="mt-6 rounded-2xl border border-cyan-400/20 bg-cyan-400/5 p-4">
-                <h3 className="font-semibold">Saved call summary</h3>
-                <p className="muted mt-2 text-sm">{summary.summary}</p>
-                <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
-                  <SummaryField label="Caller" value={summary.caller_name} />
-                  <SummaryField label="Phone" value={summary.caller_phone} />
-                  <SummaryField label="Reason" value={summary.reason_for_call} />
-                  <SummaryField label="Callback requested" value={summary.callback_requested} />
-                  <SummaryField label="Preferred time" value={summary.preferred_callback_time} />
-                  <SummaryField label="Urgency" value={summary.urgency} />
-                </dl>
-              </section>
-            )}
-          </section>
-
-        </div>
+        <section className="call-console panel" aria-label="AI call assistant">
+          <div
+            className={`assistant-orb ${isAiSpeaking ? "is-speaking" : ""} ${callId && isRecording ? "is-listening" : ""}`}
+            role="img"
+            aria-label={isAiSpeaking ? "AI assistant is speaking" : "AI assistant"}
+          >
+            <div className="assistant-orb-core" />
+          </div>
+          <button
+            type="button"
+            onClick={() => void (callId ? endConversation() : startConversation())}
+            disabled={isStartingCall}
+            className={`conversation-toggle ${callId ? "is-active" : ""}`}
+          >
+            {callId ? "Stop conversation" : isStartingCall ? "Starting…" : "Start conversation"}
+          </button>
+          <p className="call-status" aria-live="polite">
+            {isStartingCall ? "Starting conversation…" : status}
+          </p>
+          <audio ref={audioRef} className="sr-only" aria-hidden="true" />
+        </section>
 
         {isHistoryOpen && (
           <div
@@ -681,6 +508,14 @@ export default function Home() {
                   <p className="muted">{calls.length} recent conversations</p>
                 </div>
                 <div className="history-dialog-actions">
+                  <button
+                    type="button"
+                    onClick={() => void deleteAllHistory()}
+                    disabled={!calls.length || !!callId || busy || !!deletingCallId || isDeletingAllCalls}
+                    className="delete-all-action"
+                  >
+                    {isDeletingAllCalls ? "Deleting…" : "Delete all"}
+                  </button>
                   <button
                     type="button"
                     onClick={() => void refreshCalls()}
@@ -706,11 +541,7 @@ export default function Home() {
                 ) : (
                   calls.map((call) => (
                     <article key={call.id} className="history-item">
-                      <button
-                        type="button"
-                        onClick={() => void openHistory(call.id)}
-                        className="history-open"
-                      >
+                      <div className="history-details">
                         <span className="history-item-meta">
                           <span className="text-sm font-semibold">
                             {call.caller_name && call.caller_name !== "Not provided" ? call.caller_name : "Caller"}
@@ -719,12 +550,11 @@ export default function Home() {
                         </span>
                         <span className="muted text-xs">{new Date(call.started_at).toLocaleString()}</span>
                         <span className="muted text-sm">{call.summary || "Summary not available yet."}</span>
-                        <span className="history-open-label">View transcript →</span>
-                      </button>
+                      </div>
                       <button
                         type="button"
                         onClick={() => void deleteHistory(call.id)}
-                        disabled={deletingCallId === call.id || call.id === callId}
+                        disabled={deletingCallId === call.id || call.id === callId || isDeletingAllCalls}
                         className="history-delete"
                       >
                         {deletingCallId === call.id ? "Deleting…" : "Delete"}
@@ -733,7 +563,6 @@ export default function Home() {
                   ))
                 )}
               </div>
-              <p className="history-footnote">Select a call to view its transcript and saved summary.</p>
             </section>
           </div>
         )}
@@ -743,14 +572,5 @@ export default function Home() {
         </footer>
       </div>
     </main>
-  );
-}
-
-function SummaryField({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <dt className="muted text-xs">{label}</dt>
-      <dd className="mt-1 break-words">{value}</dd>
-    </div>
   );
 }
